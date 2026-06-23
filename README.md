@@ -490,6 +490,14 @@ Most tools support two output formats:
 - **markdown**: Human-readable formatted output (default)
 - **json**: Machine-readable JSON output for programmatic use
 
+## Known Limitations
+
+`wlst_analyze_logs` and `wlst_diagnose_application` read raw log/source files from disk in addition to querying WebLogic MBeans. `cmo.getRootDirectory()` returns the domain home path as known to the **Admin Server**, but the file reads happen on whatever host actually runs the `wlst.sh`/`wlst.cmd` subprocess — i.e. **the host running this MCP server**, not necessarily the Admin Server. These checks only work if:
+- this MCP server runs on the same host as the Admin Server, or
+- the domain directory is mounted at the identical path on this MCP server's host (e.g. shared/NFS storage).
+
+If neither is true, both tools detect this (`domain_home_accessible: false` in their JSON output) and surface an explicit warning instead of silently reporting "no issues found" or a false "source file missing".
+
 ## License
 
 Apache License 2.0 - See [LICENSE](LICENSE) for details.

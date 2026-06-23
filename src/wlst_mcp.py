@@ -1914,6 +1914,7 @@ analysis = {{
 serverConfig()
 domainHome = cmo.getRootDirectory()
 analysis['domain_home'] = str(domainHome)
+analysis['domain_home_accessible'] = os.path.isdir(str(domainHome))
 
 # Get server configuration
 try:
@@ -2068,6 +2069,9 @@ for err in analysis['errors']:
     if 'CONNECTION_REFUSED' in err['type']:
         probable_reasons.append('Connection issues - network or Admin Server problems')
 
+if not analysis['domain_home_accessible']:
+    probable_reasons.insert(0, 'WARNING: domain home (' + str(domainHome) + ') is not accessible from this host -- log file analysis was skipped. Run the MCP server on the Admin Server host, or mount the domain directory at the same path, to enable log-based analysis.')
+
 analysis['summary']['probable_restart_reasons'] = probable_reasons if probable_reasons else ['No clear restart reason found in analyzed logs']
 
 print('LOGS_JSON:' + json.dumps(analysis))
@@ -2104,6 +2108,12 @@ print('LOGS_JSON:' + json.dumps(analysis))
         f"**Days Analyzed**: {days_to_analyze}",
         ""
     ]
+
+    if analysis.get('domain_home_accessible') is False:
+        lines.extend([
+            f"⚠️ **Domain home not accessible**: `{analysis.get('domain_home', 'N/A')}` could not be read from the host running this MCP server. Log file analysis below is incomplete -- run the MCP server on the Admin Server host, or mount the domain directory at the same path, to enable it.",
+            ""
+        ])
 
     # Server Info
     server_info = analysis.get('server_info', {})
@@ -2246,6 +2256,7 @@ diagnostics = {{
 serverConfig()
 domainHome = str(cmo.getRootDirectory())
 diagnostics['domain_home'] = domainHome
+diagnostics['domain_home_accessible'] = os.path.isdir(domainHome)
 
 # Get all app deployments info
 cd('AppDeployments')
@@ -2329,32 +2340,39 @@ for appName in apps_to_analyze:
     if has_failed:
         diagnostics['summary']['total_failed'] += 1
 
-    # DIAGNOSTIC 1: Check if source file exists
-    sourcePath = config.get('sourcePath', '')
-    if sourcePath:
-        # Handle relative paths
-        if not os.path.isabs(sourcePath):
-            fullPath = os.path.join(domainHome, sourcePath)
-        else:
-            fullPath = sourcePath
-
-        appDiag['source_path_full'] = fullPath
-        source_exists = os.path.exists(fullPath)
-        appDiag['source_exists'] = source_exists
-
-        if not source_exists:
-            appDiag['issues'].append('SOURCE_FILE_MISSING')
-            appDiag['probable_causes'].append('The application source file (WAR/EAR) does not exist at: ' + fullPath)
-            appDiag['suggestions'].append('Re-deploy the application with a valid source file path')
-            appDiag['suggestions'].append('Or copy the application archive to: ' + fullPath)
-            diagnostics['summary']['total_issues_found'] += 1
+    if not diagnostics['domain_home_accessible']:
+        appDiag['issues'].append('FILESYSTEM_NOT_ACCESSIBLE')
+        appDiag['probable_causes'].append('Domain home (' + domainHome + ') is not accessible from this host, so the source file and staging directory could not be checked.')
+        appDiag['suggestions'].append('Run the MCP server on the Admin Server host, or mount the domain directory at the same path, to enable filesystem-based diagnostics.')
+        appDiag['source_exists'] = None
+        diagnostics['summary']['total_issues_found'] += 1
     else:
-        appDiag['issues'].append('NO_SOURCE_PATH')
-        appDiag['probable_causes'].append('Application has no source path configured')
+        # DIAGNOSTIC 1: Check if source file exists
+        sourcePath = config.get('sourcePath', '')
+        if sourcePath:
+            # Handle relative paths
+            if not os.path.isabs(sourcePath):
+                fullPath = os.path.join(domainHome, sourcePath)
+            else:
+                fullPath = sourcePath
+
+            appDiag['source_path_full'] = fullPath
+            source_exists = os.path.exists(fullPath)
+            appDiag['source_exists'] = source_exists
+
+            if not source_exists:
+                appDiag['issues'].append('SOURCE_FILE_MISSING')
+                appDiag['probable_causes'].append('The application source file (WAR/EAR) does not exist at: ' + fullPath)
+                appDiag['suggestions'].append('Re-deploy the application with a valid source file path')
+                appDiag['suggestions'].append('Or copy the application archive to: ' + fullPath)
+                diagnostics['summary']['total_issues_found'] += 1
+        else:
+            appDiag['issues'].append('NO_SOURCE_PATH')
+            appDiag['probable_causes'].append('Application has no source path configured')
 
     # DIAGNOSTIC 2: Check staging directory if staging mode is used
     stagingMode = config.get('stagingMode', '')
-    if stagingMode and stagingMode.lower() == 'stage':
+    if diagnostics['domain_home_accessible'] and stagingMode and stagingMode.lower() == 'stage':
         for target in targets:
             stagePath = os.path.join(domainHome, 'servers', target, 'stage', appName)
             if os.path.exists(stagePath):
@@ -2368,7 +2386,7 @@ for appName in apps_to_analyze:
 
     # DIAGNOSTIC 3: Search logs for errors (if enabled)
     check_logs = {check_logs_flag}
-    if check_logs and has_failed:
+    if check_logs and has_failed and diagnostics['domain_home_accessible']:
         log_errors = []
         appNameLower = appName.lower()
 
@@ -2488,6 +2506,12 @@ print('DIAG_JSON:' + json.dumps(diagnostics))
     # Format as Markdown
     lines = ["# Application Diagnostics Report", ""]
 
+    if diagnostics.get('domain_home_accessible') is False:
+        lines.extend([
+            f"⚠️ **Domain home not accessible**: `{diagnostics.get('domain_home', 'N/A')}` could not be read from the host running this MCP server. Source-file and staging-directory checks below were skipped -- run the MCP server on the Admin Server host, or mount the domain directory at the same path, to enable them.",
+            ""
+        ])
+
     summary = diagnostics.get('summary', {})
     lines.extend([
         "## Summary",
@@ -2556,6 +2580,7 @@ print('DIAG_JSON:' + json.dumps(diagnostics))
                 'OUT_OF_MEMORY': '❌ Out of memory during deployment',
                 'CONNECTION_ERROR': '❌ Connection error (database/network)',
                 'DUPLICATE_RESOURCE': '⚠️ Duplicate resource or naming conflict',
+                'FILESYSTEM_NOT_ACCESSIBLE': '⚠️ Domain home not accessible from this host -- filesystem checks skipped',
                 'UNKNOWN': '❓ Unknown issue - manual investigation needed'
             }
             for issue in issues:
