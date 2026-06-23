@@ -40,6 +40,14 @@ DEFAULT_ADMIN_URL = os.environ.get("WLST_ADMIN_URL", "")
 DEFAULT_USERNAME = os.environ.get("WLST_USERNAME", "")
 DEFAULT_PASSWORD = os.environ.get("WLST_PASSWORD", "")
 
+# Environment variable names used to pass per-call credentials into the WLST
+# subprocess (see _build_connect_script/_execute_wlst_script). Keeping these
+# out of the generated script text means credentials never get written to
+# the temporary script file on disk.
+_ENV_ADMIN_URL = "WLST_MCP_ADMIN_URL"
+_ENV_USERNAME = "WLST_MCP_USERNAME"
+_ENV_PASSWORD = "WLST_MCP_PASSWORD"
+
 # =============================================================================
 # Enums and Constants
 # =============================================================================
@@ -442,8 +450,20 @@ def _get_wlst_path() -> str:
             return os.path.join(WEBLOGIC_HOME, "oracle_common", "common", "bin", "wlst.sh")
     return WLST_PATH
 
-async def _execute_wlst_script(script: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
-    '''Execute a WLST script and return the output.'''
+async def _execute_wlst_script(
+    script: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    admin_url: str = "",
+    username: str = "",
+    password: str = "",
+) -> Dict[str, Any]:
+    '''Execute a WLST script and return the output.
+
+    Credentials are passed to the WLST subprocess via environment variables
+    (see _ENV_ADMIN_URL/_ENV_USERNAME/_ENV_PASSWORD and _build_connect_script)
+    rather than embedded in the script text, so they are never written to the
+    temporary script file on disk.
+    '''
     wlst_path = _get_wlst_path()
 
     # Create temporary script file
@@ -457,7 +477,13 @@ async def _execute_wlst_script(script: str, timeout: int = DEFAULT_TIMEOUT) -> D
             wlst_path, script_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, 'WLST_PROPERTIES': '-Dweblogic.security.SSL.ignoreHostnameVerification=true'}
+            env={
+                **os.environ,
+                'WLST_PROPERTIES': '-Dweblogic.security.SSL.ignoreHostnameVerification=true',
+                _ENV_ADMIN_URL: admin_url,
+                _ENV_USERNAME: username,
+                _ENV_PASSWORD: password,
+            }
         )
 
         try:
@@ -491,11 +517,17 @@ async def _execute_wlst_script(script: str, timeout: int = DEFAULT_TIMEOUT) -> D
         except:
             pass
 
-def _build_connect_script(admin_url: str, username: str, password: str) -> str:
-    '''Build WLST connect script fragment.'''
+def _build_connect_script() -> str:
+    '''Build WLST connect script fragment.
+
+    Reads credentials from environment variables (set by _execute_wlst_script)
+    instead of embedding them as literals, so they never end up in the
+    temporary script file written to disk.
+    '''
     return f'''
+import os
 try:
-    connect({_jython_str_literal(username)}, {_jython_str_literal(password)}, {_jython_str_literal(admin_url)})
+    connect(os.environ[{_jython_str_literal(_ENV_USERNAME)}], os.environ[{_jython_str_literal(_ENV_PASSWORD)}], os.environ[{_jython_str_literal(_ENV_ADMIN_URL)}])
 except Exception as e:
     print('CONNECTION_ERROR: ' + str(e))
     exit(1)
@@ -572,7 +604,7 @@ async def wlst_test_connection(params: ConnectionInput) -> str:
         str: Success message with domain info or error message
     '''
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 domainName = cmo.getName()
 domainVersion = cmo.getDomainVersion()
 print('CONNECTION_SUCCESS')
@@ -581,7 +613,10 @@ print('DOMAIN_VERSION: ' + str(domainVersion))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'CONNECTION_SUCCESS' in result['stdout']:
         lines = result['stdout'].split('\n')
@@ -612,7 +647,7 @@ async def wlst_list_servers(params: ListServersInput) -> str:
     '''
     script = f'''
 import json
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 servers = []
 domainRuntime()
@@ -641,7 +676,10 @@ print('SERVERS_JSON:' + json.dumps(servers))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script)
+    result = await _execute_wlst_script(
+        script,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -690,7 +728,7 @@ async def wlst_start_server(params: ServerOperationInput) -> str:
     '''
     server_name = _jython_str_literal(params.server_name)
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     start({server_name}, 'Server')
@@ -701,7 +739,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'SERVER_STARTED' in result['stdout']:
         return f"Server **{params.server_name}** started successfully."
@@ -734,7 +775,7 @@ async def wlst_stop_server(params: ServerOperationInput) -> str:
     force_param = ", force='true'" if params.force else ""
     server_name = _jython_str_literal(params.server_name)
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     domainRuntime()
@@ -758,7 +799,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_SHUTDOWN_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_SHUTDOWN_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'SERVER_STOPPED' in result['stdout']:
         return f"Server **{params.server_name}** stopped successfully."
@@ -799,7 +843,7 @@ async def wlst_restart_server(params: ServerOperationInput) -> str:
     force_param = ", force='true'" if params.force else ""
     server_name = _jython_str_literal(params.server_name)
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     shutdown({server_name}, 'Server', ignoreSessions='true', timeOut=120{force_param})
@@ -812,7 +856,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_SHUTDOWN_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_SHUTDOWN_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'SERVER_RESTARTED' in result['stdout']:
         return f"Server **{params.server_name}** restarted successfully."
@@ -851,7 +898,7 @@ async def wlst_deploy(params: DeployInput) -> str:
     stage_mode = _jython_str_literal(params.stage_mode)
 
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     deploy({app_name}, {app_path_lit}{targets_param}, stageMode={stage_mode}{plan_param})
@@ -862,7 +909,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, DEFAULT_TIMEOUT * 2)  # Longer timeout for deployments
+    result = await _execute_wlst_script(
+        script, DEFAULT_TIMEOUT * 2,  # Longer timeout for deployments
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'DEPLOY_SUCCESS' in result['stdout']:
         return f"Application **{params.app_name}** deployed successfully to {params.targets or 'default targets'}."
@@ -896,7 +946,7 @@ async def wlst_undeploy(params: UndeployInput) -> str:
     app_name = _jython_str_literal(params.app_name)
 
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     undeploy({app_name}{targets_param})
@@ -907,7 +957,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'UNDEPLOY_SUCCESS' in result['stdout']:
         return f"Application **{params.app_name}** undeployed successfully."
@@ -939,7 +992,7 @@ async def wlst_start_application(params: AppOperationInput) -> str:
     '''
     app_name = _jython_str_literal(params.app_name)
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     startApplication({app_name})
@@ -950,7 +1003,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'START_SUCCESS' in result['stdout']:
         return f"Application **{params.app_name}** started successfully."
@@ -982,7 +1038,7 @@ async def wlst_stop_application(params: AppOperationInput) -> str:
     '''
     app_name = _jython_str_literal(params.app_name)
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     stopApplication({app_name})
@@ -993,7 +1049,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'STOP_SUCCESS' in result['stdout']:
         return f"Application **{params.app_name}** stopped successfully."
@@ -1025,7 +1084,7 @@ async def wlst_redeploy_application(params: AppOperationInput) -> str:
     '''
     app_name = _jython_str_literal(params.app_name)
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     redeploy({app_name})
@@ -1036,7 +1095,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, params.timeout or DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, params.timeout or DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if result['success'] and 'REDEPLOY_SUCCESS' in result['stdout']:
         return f"Application **{params.app_name}** redeployed successfully."
@@ -1068,7 +1130,7 @@ async def wlst_list_applications(params: ListAppsInput) -> str:
     '''
     script = f'''
 import json
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 apps = []
 
@@ -1134,7 +1196,10 @@ print('APPS_JSON:' + json.dumps(apps))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script)
+    result = await _execute_wlst_script(
+        script,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -1220,7 +1285,7 @@ async def wlst_server_health(params: ServerHealthInput) -> str:
 
     script = f'''
 import json
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 health_data = []
 domainRuntime()
@@ -1247,7 +1312,10 @@ print('HEALTH_JSON:' + json.dumps(health_data))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script)
+    result = await _execute_wlst_script(
+        script,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -1301,7 +1369,7 @@ async def wlst_server_metrics(params: ServerMetricsInput) -> str:
     server_name = _jython_str_literal(params.server_name)
     script = f'''
 import json
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 metrics = {{'server': {server_name}}}
 
@@ -1366,7 +1434,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script)
+    result = await _execute_wlst_script(
+        script,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -1472,7 +1543,7 @@ async def wlst_list_datasources(params: DatasourceInput) -> str:
     '''
     script = f'''
 import json
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 datasources = []
 serverConfig()
@@ -1501,7 +1572,10 @@ print('DS_JSON:' + json.dumps(datasources))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script)
+    result = await _execute_wlst_script(
+        script,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -1550,7 +1624,7 @@ async def wlst_list_jms_resources(params: JMSInput) -> str:
     '''
     script = f'''
 import json
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 jms_data = {{'servers': [], 'modules': []}}
 
@@ -1608,7 +1682,10 @@ print('JMS_JSON:' + json.dumps(jms_data))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script)
+    result = await _execute_wlst_script(
+        script,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -1672,7 +1749,7 @@ async def wlst_thread_dump(params: ThreadDumpInput) -> str:
     '''
     server_name = _jython_str_literal(params.server_name)
     script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 try:
     serverRuntime()
@@ -1687,7 +1764,10 @@ except Exception as e:
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script)
+    result = await _execute_wlst_script(
+        script,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -1741,7 +1821,7 @@ async def wlst_execute_script(params: ExecuteScriptInput) -> str:
     password = params.get_password()
     if admin_url and username and password:
         full_script = f'''
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 # User script starts here
 {params.script}
@@ -1752,7 +1832,10 @@ async def wlst_execute_script(params: ExecuteScriptInput) -> str:
     else:
         full_script = params.script
 
-    result = await _execute_wlst_script(full_script, params.timeout or DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        full_script, params.timeout or DEFAULT_TIMEOUT,
+        admin_url=admin_url, username=username, password=password,
+    )
 
     if not result['success']:
         return f"Script execution failed:\n\n**STDOUT:**\n```\n{result['stdout']}\n```\n\n**STDERR:**\n```\n{result['stderr']}\n```"
@@ -1798,7 +1881,7 @@ from datetime import datetime, timedelta
 from java.util import Date
 from java.text import SimpleDateFormat
 
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 analysis = {{
     'server_name': {server_name},
@@ -1976,7 +2059,10 @@ print('LOGS_JSON:' + json.dumps(analysis))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, days_to_analyze * 10 + DEFAULT_TIMEOUT)
+    result = await _execute_wlst_script(
+        script, days_to_analyze * 10 + DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)
@@ -2130,7 +2216,7 @@ import json
 import os
 import re
 
-{_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
+{_build_connect_script()}
 
 diagnostics = {{
     'apps_analyzed': [],
@@ -2359,7 +2445,10 @@ print('DIAG_JSON:' + json.dumps(diagnostics))
 {_build_disconnect_script()}
 '''
 
-    result = await _execute_wlst_script(script, DEFAULT_TIMEOUT * 2)
+    result = await _execute_wlst_script(
+        script, DEFAULT_TIMEOUT * 2,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+    )
 
     if not result['success']:
         return _handle_error(result)

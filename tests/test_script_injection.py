@@ -39,31 +39,28 @@ def test_jython_str_literal_is_single_valid_expression(value):
     assert isinstance(tree.body, ast.Constant)
 
 
-def _find_call_args(script: str, func_name: str):
-    '''Parse a generated script and return the literal argument values of the first call to func_name.'''
+def test_build_connect_script_reads_credentials_from_env_not_literals():
+    '''connect() must read credentials via os.environ[...] lookups, never as literal arguments.
+
+    Credentials are never embedded in the generated script text -- see
+    test_credential_handling.py for the regression coverage proving the
+    plaintext password never reaches the temporary script file on disk.
+    '''
+    script = wlst_mcp._build_connect_script()
     tree = ast.parse(script, mode="exec")
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == func_name:
-            return [ast.literal_eval(arg) for arg in node.args]
-    raise AssertionError(f"No call to {func_name}() found in generated script")
+    connect_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "connect"
+    ]
+    assert connect_calls, "No call to connect() found in generated script"
+    for node in connect_calls:
+        assert len(node.args) == 3
+        for arg in node.args:
+            assert isinstance(arg, ast.Subscript), "connect() arguments must be os.environ[...] lookups"
 
 
-@pytest.mark.parametrize("value", MALICIOUS_PAYLOADS)
-def test_build_connect_script_escapes_username(value):
-    script = wlst_mcp._build_connect_script("t3://localhost:7001", value, "pw")
-    args = _find_call_args(script, "connect")
-    assert args[0] == value
-
-
-@pytest.mark.parametrize("value", MALICIOUS_PAYLOADS)
-def test_build_connect_script_escapes_password(value):
-    script = wlst_mcp._build_connect_script("t3://localhost:7001", "user", value)
-    args = _find_call_args(script, "connect")
-    assert args[1] == value
-
-
-@pytest.mark.parametrize("value", MALICIOUS_PAYLOADS)
-def test_build_connect_script_escapes_admin_url(value):
-    script = wlst_mcp._build_connect_script(value, "user", "pw")
-    args = _find_call_args(script, "connect")
-    assert args[2] == value
+def test_build_connect_script_references_expected_env_var_names():
+    script = wlst_mcp._build_connect_script()
+    assert wlst_mcp._ENV_USERNAME in script
+    assert wlst_mcp._ENV_PASSWORD in script
+    assert wlst_mcp._ENV_ADMIN_URL in script

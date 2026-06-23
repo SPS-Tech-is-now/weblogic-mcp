@@ -28,7 +28,7 @@ INJECTION_PAYLOADS = [
 def _capture_script(monkeypatch, tool_fn, params):
     captured = {}
 
-    async def fake_execute(script, timeout=None):
+    async def fake_execute(script, timeout=None, **credentials):
         captured["script"] = script
         return {"success": False, "returncode": 1, "stdout": "", "stderr": "", "error": "mocked"}
 
