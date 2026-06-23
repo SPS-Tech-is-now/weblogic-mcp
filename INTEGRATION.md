@@ -399,7 +399,7 @@ You can configure multiple MCP servers for different environments:
   "mcpServers": {
     "wlst-dev": {
       "command": "python",
-      "args": ["/path/to/wlst_mcp.py"],
+      "args": ["/path/to/wlst-mcp/src/wlst_mcp.py"],
       "env": {
         "WLST_ADMIN_URL": "t3://dev-server:7001",
         "WLST_USERNAME": "weblogic",
@@ -408,7 +408,7 @@ You can configure multiple MCP servers for different environments:
     },
     "wlst-prod": {
       "command": "python",
-      "args": ["/path/to/wlst_mcp.py"],
+      "args": ["/path/to/wlst-mcp/src/wlst_mcp.py"],
       "env": {
         "WLST_ADMIN_URL": "t3s://prod-server:7002",
         "WLST_USERNAME": "prod_admin",

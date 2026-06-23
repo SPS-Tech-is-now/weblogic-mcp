@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An MCP (Model Context Protocol) server, implemented as a single Python file (`wlst_mcp.py`), that exposes Oracle WebLogic Server administration as MCP tools. It works by generating WLST (WebLogic Scripting Tool / Jython) script fragments at runtime, writing them to a temp file, and shelling out to the `wlst.sh`/`wlst.cmd` executable to run them.
+An MCP (Model Context Protocol) server, implemented as a single Python file (`src/wlst_mcp.py`), that exposes Oracle WebLogic Server administration as MCP tools. It works by generating WLST (WebLogic Scripting Tool / Jython) script fragments at runtime, writing them to a temp file, and shelling out to the `wlst.sh`/`wlst.cmd` executable to run them.
 
 ## Setup and running
 
@@ -15,7 +15,7 @@ pip install -r requirements.txt
 Run directly (used as the MCP server entry point, normally launched by an MCP client, not by hand):
 
 ```bash
-python wlst_mcp.py
+python src/wlst_mcp.py
 ```
 
 There is no build step, lint config, or test suite in this repo — it's a single dependency-light script (`mcp`, `pydantic`). Validate changes by exercising the tool through an MCP client (e.g. Claude Code's `.mcp.json`/`~/.claude.json` config, see README.md) against a real or test WebLogic domain, since there is nothing to unit test in isolation (every tool's logic is "build a WLST script, run it, parse stdout").
@@ -30,7 +30,7 @@ There is no build step, lint config, or test suite in this repo — it's a singl
 
 ## Architecture
 
-Everything lives in `wlst_mcp.py`, organized top-to-bottom into four sections (see the `# ====` banner comments):
+Everything lives in `src/wlst_mcp.py`, organized top-to-bottom into four sections (see the `# ====` banner comments):
 
 1. **Pydantic input models** — one `BaseModel` per tool (e.g. `ConnectionInput`, `DeployInput`, `ServerOperationInput`). All use `extra='forbid'` and `str_strip_whitespace=True`. Each model that needs connection info defines `get_admin_url()`/`get_username()`/`get_password()` helper methods that fall back to the `WLST_*` env-var defaults when the field is `None` — this fallback pattern is duplicated across every model rather than shared via inheritance, so when adding a new tool, copy the pattern rather than trying to refactor it away mid-change.
 
