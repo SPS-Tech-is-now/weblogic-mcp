@@ -48,6 +48,12 @@ _ENV_ADMIN_URL = "WLST_MCP_ADMIN_URL"
 _ENV_USERNAME = "WLST_MCP_USERNAME"
 _ENV_PASSWORD = "WLST_MCP_PASSWORD"
 
+# wlst_execute_script runs arbitrary caller-supplied WLST/Jython code with no
+# sandboxing. It is registered as an MCP tool only if an operator explicitly
+# opts in, since otherwise it is a full domain/host compromise vector for any
+# caller of this MCP server.
+_EXECUTE_SCRIPT_ENABLED = os.environ.get("WLST_ALLOW_EXECUTE_SCRIPT", "").strip().lower() in ("1", "true", "yes")
+
 # =============================================================================
 # Enums and Constants
 # =============================================================================
@@ -346,6 +352,7 @@ class ExecuteScriptInput(BaseModel):
     password: Optional[str] = Field(default=None, description="WebLogic admin password. Uses WLST_PASSWORD env var if not provided.")
     script: str = Field(..., description="WLST/Jython script to execute", min_length=1)
     timeout: Optional[int] = Field(default=DEFAULT_TIMEOUT, description="Script execution timeout", ge=10, le=1800)
+    dry_run: bool = Field(default=False, description="If true, return the script that would run without executing it")
 
     def get_admin_url(self) -> str:
         return self.admin_url or DEFAULT_ADMIN_URL
@@ -1787,22 +1794,14 @@ except Exception as e:
 
     return "Unable to retrieve thread dump."
 
-@mcp.tool(
-    name="wlst_execute_script",
-    annotations={
-        "title": "Execute Custom WLST Script",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": False,
-        "openWorldHint": True
-    }
-)
 async def wlst_execute_script(params: ExecuteScriptInput) -> str:
     '''Execute a custom WLST/Jython script.
 
     This tool allows running arbitrary WLST commands. Use with caution as it can
     modify server configuration. The script can optionally connect to a server
-    if credentials are provided.
+    if credentials are provided. Only registered as an MCP tool when the
+    WLST_ALLOW_EXECUTE_SCRIPT environment variable is set, since it otherwise
+    allows arbitrary code execution for any caller of this MCP server.
 
     Args:
         params (ExecuteScriptInput): Script execution parameters including:
@@ -1811,9 +1810,10 @@ async def wlst_execute_script(params: ExecuteScriptInput) -> str:
             - username (Optional[str]): Admin username
             - password (Optional[str]): Admin password
             - timeout (Optional[int]): Execution timeout
+            - dry_run (bool): If true, return the script that would run without executing it
 
     Returns:
-        str: Script execution output
+        str: Script execution output (or the would-be script, if dry_run)
     '''
     # Build the full script
     admin_url = params.get_admin_url()
@@ -1832,6 +1832,9 @@ async def wlst_execute_script(params: ExecuteScriptInput) -> str:
     else:
         full_script = params.script
 
+    if params.dry_run:
+        return f"Dry run -- script not executed:\n\n```\n{full_script}\n```"
+
     result = await _execute_wlst_script(
         full_script, params.timeout or DEFAULT_TIMEOUT,
         admin_url=admin_url, username=username, password=password,
@@ -1841,6 +1844,18 @@ async def wlst_execute_script(params: ExecuteScriptInput) -> str:
         return f"Script execution failed:\n\n**STDOUT:**\n```\n{result['stdout']}\n```\n\n**STDERR:**\n```\n{result['stderr']}\n```"
 
     return f"Script executed successfully:\n\n```\n{result['stdout']}\n```"
+
+if _EXECUTE_SCRIPT_ENABLED:
+    wlst_execute_script = mcp.tool(
+        name="wlst_execute_script",
+        annotations={
+            "title": "Execute Custom WLST Script",
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": True
+        }
+    )(wlst_execute_script)
 
 @mcp.tool(
     name="wlst_analyze_logs",

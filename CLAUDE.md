@@ -27,6 +27,7 @@ There is no build step or lint config. There is a small pytest suite under `test
 - `WLST_TIMEOUT` — default script timeout in seconds (default 120).
 - `WLST_SHUTDOWN_TIMEOUT` — default timeout for stop/restart operations (default 300).
 - `WLST_ADMIN_URL`, `WLST_USERNAME`, `WLST_PASSWORD` — default connection credentials, used when a tool call doesn't supply its own.
+- `WLST_ALLOW_EXECUTE_SCRIPT` — must be set (`true`/`1`/`yes`) for `wlst_execute_script` to be registered as an MCP tool at all (checked once, at import time, via `_EXECUTE_SCRIPT_ENABLED`). That tool runs arbitrary caller-supplied Jython with no sandboxing, so it's opt-in; see `tests/test_execute_script_guardrails.py`.
 
 ## Architecture
 

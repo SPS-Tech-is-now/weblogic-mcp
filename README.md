@@ -318,6 +318,8 @@ Get a thread dump from a WebLogic server for debugging.
 
 Execute a custom WLST/Jython script.
 
+> **Security warning**: this tool runs arbitrary caller-supplied code with no sandboxing — anyone who can call it can run arbitrary Jython (and, by extension, arbitrary OS commands) as the user running this MCP server. It is **disabled by default** and only registered when the `WLST_ALLOW_EXECUTE_SCRIPT` environment variable is set (see below). Use `dry_run` to preview what a script would do before actually running it.
+
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -326,6 +328,7 @@ Execute a custom WLST/Jython script.
 | `username` | string | No | WebLogic admin username |
 | `password` | string | No | WebLogic admin password |
 | `timeout` | integer | No | Script execution timeout (10-1800, default: 120) |
+| `dry_run` | boolean | No | If true, return the script that would run without executing it (default: false) |
 
 ## Configuration & Environment Variables
 
@@ -349,6 +352,7 @@ This means:
 | `WLST_ADMIN_URL` | WebLogic Admin Server URL (protocol://host:port) | `t3://localhost:7001` |
 | `WLST_USERNAME` | WebLogic admin username | `weblogic` |
 | `WLST_PASSWORD` | WebLogic admin password | `welcome1` |
+| `WLST_ALLOW_EXECUTE_SCRIPT` | Opt-in flag to register `wlst_execute_script` (arbitrary code execution). Unset/empty = disabled. | `true` |
 
 ### URL Format
 
