@@ -98,6 +98,7 @@ wlst-mcp/
 | Tool | Description |
 |------|-------------|
 | `wlst_list_datasources` | List all JDBC datasources |
+| `wlst_create_datasource` | Create a generic JDBC datasource |
 | `wlst_list_jms_resources` | List JMS servers, modules, queues, and topics |
 
 ### Diagnostics
@@ -283,6 +284,28 @@ List all JDBC datasources in a WebLogic domain.
 | `username` | string | No | WebLogic admin username |
 | `password` | string | No | WebLogic admin password |
 | `response_format` | string | No | Output format: `markdown` or `json` (default: `markdown`) |
+
+---
+
+### wlst_create_datasource
+
+Create a generic JDBC datasource in a WebLogic domain.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ds_name` | string | **Yes** | Datasource name |
+| `jndi_name` | string | **Yes** | JNDI name (e.g., `jdbc/myDS`) |
+| `db_url` | string | **Yes** | Database JDBC URL |
+| `db_driver` | string | **Yes** | JDBC driver class name |
+| `db_user` | string | **Yes** | Database username |
+| `db_password` | string | **Yes** | Database password |
+| `targets` | string | **Yes** | Comma-separated list of target servers/clusters |
+| `min_capacity` | integer | No | Minimum pool capacity (0-100, default: 1) |
+| `max_capacity` | integer | No | Maximum pool capacity (1-500, default: 15) |
+| `admin_url` | string | No | Admin Server URL |
+| `username` | string | No | WebLogic admin username |
+| `password` | string | No | WebLogic admin password |
 
 ---
 

@@ -85,6 +85,24 @@ TOOL_CASES = [
     ToolCase(wlst_mcp.wlst_undeploy, wlst_mcp.UndeployInput, "targets", {"app_name": "safe-app"}),
 ]
 
+_CREATE_DS_BASE = {
+    "ds_name": "safeDS",
+    "jndi_name": "jdbc/safeDS",
+    "db_url": "jdbc:oracle:thin:@localhost:1521/orcl",
+    "db_driver": "oracle.jdbc.OracleDriver",
+    "db_user": "safe-user",
+    "db_password": "safe-password",
+    "targets": "server1",
+}
+
+for _field in ("ds_name", "jndi_name", "db_url", "db_driver", "db_user", "targets"):
+    TOOL_CASES.append(ToolCase(
+        wlst_mcp.wlst_create_datasource,
+        wlst_mcp.CreateDatasourceInput,
+        _field,
+        {k: v for k, v in _CREATE_DS_BASE.items() if k != _field},
+    ))
+
 
 @pytest.mark.parametrize("case", TOOL_CASES, ids=[c.id for c in TOOL_CASES])
 @pytest.mark.parametrize("malicious_value", INJECTION_PAYLOADS)

@@ -47,6 +47,7 @@ DEFAULT_PASSWORD = os.environ.get("WLST_PASSWORD", "")
 _ENV_ADMIN_URL = "WLST_MCP_ADMIN_URL"
 _ENV_USERNAME = "WLST_MCP_USERNAME"
 _ENV_PASSWORD = "WLST_MCP_PASSWORD"
+_ENV_DB_PASSWORD = "WLST_MCP_DB_PASSWORD"
 
 # wlst_execute_script runs arbitrary caller-supplied WLST/Jython code with no
 # sandboxing. It is registered as an MCP tool only if an operator explicitly
@@ -463,6 +464,7 @@ async def _execute_wlst_script(
     admin_url: str = "",
     username: str = "",
     password: str = "",
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     '''Execute a WLST script and return the output.
 
@@ -490,6 +492,7 @@ async def _execute_wlst_script(
                 _ENV_ADMIN_URL: admin_url,
                 _ENV_USERNAME: username,
                 _ENV_PASSWORD: password,
+                **(extra_env or {}),
             }
         )
 
@@ -1609,6 +1612,99 @@ print('DS_JSON:' + json.dumps(datasources))
         ])
 
     return '\n'.join(lines)
+
+@mcp.tool(
+    name="wlst_create_datasource",
+    annotations={
+        "title": "Create JDBC Datasource",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True
+    }
+)
+async def wlst_create_datasource(params: CreateDatasourceInput) -> str:
+    '''Create a generic JDBC datasource in a WebLogic domain.
+
+    Args:
+        params (CreateDatasourceInput): Datasource creation parameters
+
+    Returns:
+        str: Creation result message
+    '''
+    ds_name = _jython_str_literal(params.ds_name)
+    jndi_name = _jython_str_literal(params.jndi_name)
+    db_url = _jython_str_literal(params.db_url)
+    db_driver = _jython_str_literal(params.db_driver)
+    db_user = _jython_str_literal(params.db_user)
+    targets = _jython_str_literal(params.targets)
+
+    script = f'''
+import jarray
+from java.lang import String
+from javax.management import ObjectName
+import os
+{_build_connect_script()}
+
+try:
+    edit()
+    startEdit()
+
+    dsName = {ds_name}
+    cd('/')
+    cmo.createJDBCSystemResource(dsName)
+
+    cd('/JDBCSystemResources/' + dsName + '/JDBCResource/' + dsName)
+    cmo.setName(dsName)
+
+    cd('/JDBCSystemResources/' + dsName + '/JDBCResource/' + dsName + '/JDBCDataSourceParams/' + dsName)
+    set('JNDINames', jarray.array([String({jndi_name})], String))
+
+    cd('/JDBCSystemResources/' + dsName + '/JDBCResource/' + dsName + '/JDBCDriverParams/' + dsName)
+    cmo.setUrl({db_url})
+    cmo.setDriverName({db_driver})
+    cmo.setPassword(os.environ[{_jython_str_literal(_ENV_DB_PASSWORD)}])
+
+    cd('/JDBCSystemResources/' + dsName + '/JDBCResource/' + dsName + '/JDBCDriverParams/' + dsName + '/Properties/' + dsName)
+    cmo.createProperty('user')
+    cd('/JDBCSystemResources/' + dsName + '/JDBCResource/' + dsName + '/JDBCDriverParams/' + dsName + '/Properties/' + dsName + '/Properties/user')
+    cmo.setValue({db_user})
+
+    cd('/JDBCSystemResources/' + dsName + '/JDBCResource/' + dsName + '/JDBCConnectionPoolParams/' + dsName)
+    cmo.setInitialCapacity({params.min_capacity})
+    cmo.setMaxCapacity({params.max_capacity})
+
+    cd('/JDBCSystemResources/' + dsName)
+    targetNames = [t.strip() for t in {targets}.split(',') if t.strip()]
+    targetObjNames = jarray.array([ObjectName('com.bea:Name=' + t + ',Type=Server') for t in targetNames], ObjectName)
+    set('Targets', targetObjNames)
+
+    activate()
+    print('CREATE_DS_SUCCESS: ' + dsName)
+except Exception as e:
+    try:
+        cancelEdit('y')
+    except:
+        pass
+    print('CREATE_DS_ERROR: ' + str(e))
+
+{_build_disconnect_script()}
+'''
+
+    result = await _execute_wlst_script(
+        script, DEFAULT_TIMEOUT,
+        admin_url=params.get_admin_url(), username=params.get_username(), password=params.get_password(),
+        extra_env={_ENV_DB_PASSWORD: params.db_password},
+    )
+
+    if result['success'] and 'CREATE_DS_SUCCESS' in result['stdout']:
+        return f"Datasource **{params.ds_name}** created successfully with JNDI name `{params.jndi_name}`, targeted to {params.targets}."
+
+    if 'CREATE_DS_ERROR' in result['stdout']:
+        error_line = [l for l in result['stdout'].split('\n') if 'CREATE_DS_ERROR' in l]
+        return f"Error creating datasource: {error_line[0].replace('CREATE_DS_ERROR: ', '') if error_line else 'Unknown error'}"
+
+    return _handle_error(result)
 
 @mcp.tool(
     name="wlst_list_jms_resources",
