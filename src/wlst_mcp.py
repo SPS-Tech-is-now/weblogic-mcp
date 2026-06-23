@@ -429,6 +429,10 @@ class AppDiagnosticInput(BaseModel):
 # Utility Functions
 # =============================================================================
 
+def _jython_str_literal(value: Any) -> str:
+    '''Render a value as a safely-escaped Jython/Python string literal for embedding in generated scripts.'''
+    return repr(str(value))
+
 def _get_wlst_path() -> str:
     '''Get the full path to WLST executable.'''
     if WEBLOGIC_HOME:
@@ -491,7 +495,7 @@ def _build_connect_script(admin_url: str, username: str, password: str) -> str:
     '''Build WLST connect script fragment.'''
     return f'''
 try:
-    connect('{username}', '{password}', '{admin_url}')
+    connect({_jython_str_literal(username)}, {_jython_str_literal(password)}, {_jython_str_literal(admin_url)})
 except Exception as e:
     print('CONNECTION_ERROR: ' + str(e))
     exit(1)
@@ -684,12 +688,13 @@ async def wlst_start_server(params: ServerOperationInput) -> str:
     Returns:
         str: Operation result message
     '''
+    server_name = _jython_str_literal(params.server_name)
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
-    start('{params.server_name}', 'Server')
-    print('SERVER_STARTED: {params.server_name}')
+    start({server_name}, 'Server')
+    print('SERVER_STARTED: ' + {server_name})
 except Exception as e:
     print('START_ERROR: ' + str(e))
 
@@ -727,23 +732,24 @@ async def wlst_stop_server(params: ServerOperationInput) -> str:
         str: Operation result message
     '''
     force_param = ", force='true'" if params.force else ""
+    server_name = _jython_str_literal(params.server_name)
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
     domainRuntime()
-    cd('ServerLifeCycleRuntimes/{params.server_name}')
+    cd('ServerLifeCycleRuntimes/' + {server_name})
     serverState = cmo.getState()
     print('SERVER_STATE: ' + serverState)
 
     if serverState == 'SHUTDOWN':
-        print('SERVER_ALREADY_STOPPED: {params.server_name}')
+        print('SERVER_ALREADY_STOPPED: ' + {server_name})
     elif serverState in ['RUNNING', 'ADMIN', 'RESUMING']:
-        shutdown('{params.server_name}', 'Server', ignoreSessions='true', timeOut=90{force_param})
-        print('SERVER_STOPPED: {params.server_name}')
+        shutdown({server_name}, 'Server', ignoreSessions='true', timeOut=90{force_param})
+        print('SERVER_STOPPED: ' + {server_name})
     elif serverState in ['STARTING', 'STANDBY', 'SUSPENDING']:
-        shutdown('{params.server_name}', 'Server', ignoreSessions='true', timeOut=90, force='true')
-        print('SERVER_STOPPED: {params.server_name}')
+        shutdown({server_name}, 'Server', ignoreSessions='true', timeOut=90, force='true')
+        print('SERVER_STOPPED: ' + {server_name})
     else:
         print('SERVER_UNKNOWN_STATE: ' + serverState)
 except Exception as e:
@@ -791,14 +797,15 @@ async def wlst_restart_server(params: ServerOperationInput) -> str:
         str: Operation result message
     '''
     force_param = ", force='true'" if params.force else ""
+    server_name = _jython_str_literal(params.server_name)
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
-    shutdown('{params.server_name}', 'Server', ignoreSessions='true', timeOut=120{force_param})
-    print('SERVER_STOPPED: {params.server_name}')
-    start('{params.server_name}', 'Server')
-    print('SERVER_RESTARTED: {params.server_name}')
+    shutdown({server_name}, 'Server', ignoreSessions='true', timeOut=120{force_param})
+    print('SERVER_STOPPED: ' + {server_name})
+    start({server_name}, 'Server')
+    print('SERVER_RESTARTED: ' + {server_name})
 except Exception as e:
     print('RESTART_ERROR: ' + str(e))
 
@@ -835,17 +842,20 @@ async def wlst_deploy(params: DeployInput) -> str:
     Returns:
         str: Deployment result message
     '''
-    targets_param = f", targets='{params.targets}'" if params.targets else ""
-    plan_param = f", planPath='{params.plan_path.replace(chr(92), '/')}'" if params.plan_path else ""
+    targets_param = f", targets={_jython_str_literal(params.targets)}" if params.targets else ""
+    plan_param = f", planPath={_jython_str_literal(params.plan_path.replace(chr(92), '/'))}" if params.plan_path else ""
     # Convert backslashes to forward slashes for Windows path compatibility
     app_path_safe = params.app_path.replace('\\', '/')
+    app_name = _jython_str_literal(params.app_name)
+    app_path_lit = _jython_str_literal(app_path_safe)
+    stage_mode = _jython_str_literal(params.stage_mode)
 
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
-    deploy('{params.app_name}', '{app_path_safe}'{targets_param}, stageMode='{params.stage_mode}'{plan_param})
-    print('DEPLOY_SUCCESS: {params.app_name}')
+    deploy({app_name}, {app_path_lit}{targets_param}, stageMode={stage_mode}{plan_param})
+    print('DEPLOY_SUCCESS: ' + {app_name})
 except Exception as e:
     print('DEPLOY_ERROR: ' + str(e))
 
@@ -882,14 +892,15 @@ async def wlst_undeploy(params: UndeployInput) -> str:
     Returns:
         str: Undeployment result message
     '''
-    targets_param = f", targets='{params.targets}'" if params.targets else ""
+    targets_param = f", targets={_jython_str_literal(params.targets)}" if params.targets else ""
+    app_name = _jython_str_literal(params.app_name)
 
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
-    undeploy('{params.app_name}'{targets_param})
-    print('UNDEPLOY_SUCCESS: {params.app_name}')
+    undeploy({app_name}{targets_param})
+    print('UNDEPLOY_SUCCESS: ' + {app_name})
 except Exception as e:
     print('UNDEPLOY_ERROR: ' + str(e))
 
@@ -926,12 +937,13 @@ async def wlst_start_application(params: AppOperationInput) -> str:
     Returns:
         str: Operation result message
     '''
+    app_name = _jython_str_literal(params.app_name)
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
-    startApplication('{params.app_name}')
-    print('START_SUCCESS: {params.app_name}')
+    startApplication({app_name})
+    print('START_SUCCESS: ' + {app_name})
 except Exception as e:
     print('START_ERROR: ' + str(e))
 
@@ -968,12 +980,13 @@ async def wlst_stop_application(params: AppOperationInput) -> str:
     Returns:
         str: Operation result message
     '''
+    app_name = _jython_str_literal(params.app_name)
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
-    stopApplication('{params.app_name}')
-    print('STOP_SUCCESS: {params.app_name}')
+    stopApplication({app_name})
+    print('STOP_SUCCESS: ' + {app_name})
 except Exception as e:
     print('STOP_ERROR: ' + str(e))
 
@@ -1010,12 +1023,13 @@ async def wlst_redeploy_application(params: AppOperationInput) -> str:
     Returns:
         str: Operation result message
     '''
+    app_name = _jython_str_literal(params.app_name)
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
-    redeploy('{params.app_name}')
-    print('REDEPLOY_SUCCESS: {params.app_name}')
+    redeploy({app_name})
+    print('REDEPLOY_SUCCESS: ' + {app_name})
 except Exception as e:
     print('REDEPLOY_ERROR: ' + str(e))
 
@@ -1202,7 +1216,7 @@ async def wlst_server_health(params: ServerHealthInput) -> str:
     Returns:
         str: Health status in requested format
     '''
-    server_filter = f"if serverName == '{params.server_name}':" if params.server_name else "if True:"
+    server_filter = f"if serverName == {_jython_str_literal(params.server_name)}:" if params.server_name else "if True:"
 
     script = f'''
 import json
@@ -1284,20 +1298,21 @@ async def wlst_server_metrics(params: ServerMetricsInput) -> str:
     Returns:
         str: Server metrics in requested format
     '''
+    server_name = _jython_str_literal(params.server_name)
     script = f'''
 import json
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
-metrics = {{'server': '{params.server_name}'}}
+metrics = {{'server': {server_name}}}
 
 try:
     domainRuntime()
-    serverPath = 'ServerRuntimes/{params.server_name}'
+    serverPath = 'ServerRuntimes/' + {server_name}
 
     # JVM metrics
     if '{params.metric_type}' in ['all', 'jvm']:
         try:
-            cd(serverPath + '/JVMRuntime/{params.server_name}')
+            cd(serverPath + '/JVMRuntime/' + {server_name})
             metrics['jvm'] = {{
                 'heapSizeCurrent': cmo.getHeapSizeCurrent(),
                 'heapSizeMax': cmo.getHeapSizeMax(),
@@ -1325,7 +1340,7 @@ try:
     # JDBC metrics
     if '{params.metric_type}' in ['all', 'jdbc']:
         try:
-            cd(serverPath + '/JDBCServiceRuntime/{params.server_name}')
+            cd(serverPath + '/JDBCServiceRuntime/' + {server_name})
             dsRuntimes = ls('JDBCDataSourceRuntimeMBeans', returnMap='true')
             jdbc_data = []
             if dsRuntimes:
@@ -1655,12 +1670,13 @@ async def wlst_thread_dump(params: ThreadDumpInput) -> str:
     Returns:
         str: Thread dump output
     '''
+    server_name = _jython_str_literal(params.server_name)
     script = f'''
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 try:
     serverRuntime()
-    cd('/ServerRuntimes/{params.server_name}')
+    cd('/ServerRuntimes/' + {server_name})
     threadDump = cmo.getThreadStackDump()
     print('THREAD_DUMP_START')
     print(threadDump)
@@ -1772,6 +1788,7 @@ async def wlst_analyze_logs(params: ServerLogsInput) -> str:
         str: Analysis results with identified issues and restart reasons
     '''
     days_to_analyze = params.get_days()
+    server_name = _jython_str_literal(params.server_name)
 
     script = f'''
 import json
@@ -1784,7 +1801,7 @@ from java.text import SimpleDateFormat
 {_build_connect_script(params.get_admin_url(), params.get_username(), params.get_password())}
 
 analysis = {{
-    'server_name': '{params.server_name}',
+    'server_name': {server_name},
     'days_analyzed': {days_to_analyze},
     'log_type': '{params.log_type}',
     'server_info': {{}},
@@ -1802,7 +1819,7 @@ analysis['domain_home'] = str(domainHome)
 
 # Get server configuration
 try:
-    cd('/Servers/{params.server_name}')
+    cd('/Servers/' + {server_name})
     analysis['server_info']['listen_port'] = cmo.getListenPort()
     analysis['server_info']['listen_address'] = str(cmo.getListenAddress()) if cmo.getListenAddress() else 'localhost'
     analysis['server_info']['auto_restart'] = cmo.getAutoRestart()
@@ -1817,7 +1834,7 @@ except Exception as e:
 # Get current server state and NodeManager restart count
 try:
     domainRuntime()
-    cd('/ServerLifeCycleRuntimes/{params.server_name}')
+    cd('/ServerLifeCycleRuntimes/' + {server_name})
     analysis['server_info']['current_state'] = str(cmo.getState())
     analysis['server_info']['nm_restart_count'] = cmo.getNodeManagerRestartCount()
 except Exception as e:
@@ -1829,16 +1846,16 @@ cutoff_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
 analysis['time_range'] = {{'from': cutoff_str, 'to': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}}
 
 # Define log file paths
-server_log_dir = os.path.join(str(domainHome), 'servers', '{params.server_name}', 'logs')
+server_log_dir = os.path.join(str(domainHome), 'servers', {server_name}, 'logs')
 nm_log_path = os.path.join(str(domainHome), 'nodemanager', 'nodemanager.log')
 
 # Patterns to search for
 restart_patterns = [
-    (r'Starting.*{params.server_name}', 'SERVER_START'),
-    (r'Stopping.*{params.server_name}', 'SERVER_STOP'),
-    (r'Server.*{params.server_name}.*started', 'SERVER_STARTED'),
-    (r'Server.*{params.server_name}.*stopped', 'SERVER_STOPPED'),
-    (r'Server.*{params.server_name}.*failed', 'SERVER_FAILED'),
+    (r'Starting.*' + re.escape({server_name}), 'SERVER_START'),
+    (r'Stopping.*' + re.escape({server_name}), 'SERVER_STOP'),
+    (r'Server.*' + re.escape({server_name}) + r'.*started', 'SERVER_STARTED'),
+    (r'Server.*' + re.escape({server_name}) + r'.*stopped', 'SERVER_STOPPED'),
+    (r'Server.*' + re.escape({server_name}) + r'.*failed', 'SERVER_FAILED'),
     (r'Auto restart', 'AUTO_RESTART'),
     (r'NodeManager.*restart', 'NM_RESTART'),
     (r'Process.*crashed', 'PROCESS_CRASH'),
@@ -1902,7 +1919,7 @@ if '{params.log_type}' in ['all', 'nodemanager']:
 
 # Analyze server log
 if '{params.log_type}' in ['all', 'server']:
-    server_log = os.path.join(server_log_dir, '{params.server_name}.log')
+    server_log = os.path.join(server_log_dir, {server_name} + '.log')
     if os.path.exists(server_log):
         server_results = parse_log_file(server_log, error_patterns + warning_patterns + restart_patterns)
         for r in server_results:
@@ -1915,7 +1932,7 @@ if '{params.log_type}' in ['all', 'server']:
 
 # Analyze stdout/stderr log
 if '{params.log_type}' in ['all', 'stdout']:
-    stdout_log = os.path.join(server_log_dir, '{params.server_name}.out')
+    stdout_log = os.path.join(server_log_dir, {server_name} + '.out')
     if os.path.exists(stdout_log):
         stdout_results = parse_log_file(stdout_log, error_patterns + restart_patterns)
         for r in stdout_results:
@@ -2105,7 +2122,7 @@ async def wlst_diagnose_application(params: AppDiagnosticInput) -> str:
     Returns:
         str: Diagnostic report with findings and recommendations
     '''
-    app_filter = f"app_name = '{params.app_name}'" if params.app_name else "app_name = None"
+    app_filter = f"app_name = {_jython_str_literal(params.app_name)}" if params.app_name else "app_name = None"
     check_logs_flag = "True" if params.check_logs else "False"
 
     script = f'''
