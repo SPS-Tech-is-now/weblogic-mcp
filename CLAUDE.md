@@ -1,0 +1,58 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+An MCP (Model Context Protocol) server, implemented as a single Python file (`wlst_mcp.py`), that exposes Oracle WebLogic Server administration as MCP tools. It works by generating WLST (WebLogic Scripting Tool / Jython) script fragments at runtime, writing them to a temp file, and shelling out to the `wlst.sh`/`wlst.cmd` executable to run them.
+
+## Setup and running
+
+```bash
+pip install -r requirements.txt
+```
+
+Run directly (used as the MCP server entry point, normally launched by an MCP client, not by hand):
+
+```bash
+python wlst_mcp.py
+```
+
+There is no build step, lint config, or test suite in this repo — it's a single dependency-light script (`mcp`, `pydantic`). Validate changes by exercising the tool through an MCP client (e.g. Claude Code's `.mcp.json`/`~/.claude.json` config, see README.md) against a real or test WebLogic domain, since there is nothing to unit test in isolation (every tool's logic is "build a WLST script, run it, parse stdout").
+
+## Configuration (env vars)
+
+- `WEBLOGIC_HOME` — WebLogic install dir; used to derive the WLST executable path (`$WEBLOGIC_HOME/oracle_common/common/bin/wlst.sh|.cmd`).
+- `WLST_PATH` — overrides the WLST executable path directly (used only if `WEBLOGIC_HOME` is unset).
+- `WLST_TIMEOUT` — default script timeout in seconds (default 120).
+- `WLST_SHUTDOWN_TIMEOUT` — default timeout for stop/restart operations (default 300).
+- `WLST_ADMIN_URL`, `WLST_USERNAME`, `WLST_PASSWORD` — default connection credentials, used when a tool call doesn't supply its own.
+
+## Architecture
+
+Everything lives in `wlst_mcp.py`, organized top-to-bottom into four sections (see the `# ====` banner comments):
+
+1. **Pydantic input models** — one `BaseModel` per tool (e.g. `ConnectionInput`, `DeployInput`, `ServerOperationInput`). All use `extra='forbid'` and `str_strip_whitespace=True`. Each model that needs connection info defines `get_admin_url()`/`get_username()`/`get_password()` helper methods that fall back to the `WLST_*` env-var defaults when the field is `None` — this fallback pattern is duplicated across every model rather than shared via inheritance, so when adding a new tool, copy the pattern rather than trying to refactor it away mid-change.
+
+2. **Utility functions** (`_execute_wlst_script`, `_build_connect_script`, `_build_disconnect_script`, `_handle_error`, `_parse_json_output`) — the core execution engine:
+   - `_execute_wlst_script` writes the script string to a `NamedTemporaryFile`, runs it via `asyncio.create_subprocess_exec(wlst_path, script_path, ...)` with a timeout, captures stdout/stderr, and deletes the temp file.
+   - `_build_connect_script`/`_build_disconnect_script` produce the `connect(...)`/`disconnect()` WLST fragments injected at the top/bottom of nearly every generated script, wrapped in try/except that prints a `CONNECTION_ERROR: ...` sentinel line on failure.
+   - `_handle_error` inspects stdout for that sentinel to produce a friendly error message.
+
+3. **Tool implementations** — each `@mcp.tool(...)`-decorated async function follows the same shape:
+   - Build a Jython/WLST script as an f-string, embedding parameters from the validated Pydantic model directly into the script text (no escaping beyond ad hoc `.replace()` calls for things like backslash-to-forward-slash path conversion).
+   - The script prints a unique sentinel line (e.g. `SERVERS_JSON:`, `DEPLOY_SUCCESS:`, `HEALTH_JSON:`) so the Python side can locate the relevant output by scanning `stdout.split('\n')` for that prefix, since `wlst.sh` also emits its own banner/noise.
+   - Structured data crosses the WLST→Python boundary as a single-line `json.dumps(...)` printed after a sentinel prefix; the tool function then parses it back out and renders either Markdown (default, with emoji status indicators 🟢🟡🔴) or raw JSON depending on `response_format`.
+   - Tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) are set per-tool and should accurately reflect the operation (e.g. `wlst_stop_server`/`wlst_undeploy`/`wlst_execute_script` are `destructiveHint: True`).
+
+4. **Entry point** — `mcp.run()` under `if __name__ == "__main__"`, using FastMCP's default (stdio) transport.
+
+### Adding a new tool
+
+Follow the established pattern: define a Pydantic input model (with the `get_admin_url/username/password` trio if it needs a connection), write a WLST script f-string with a unique sentinel + JSON output line, call `_execute_wlst_script`, parse the sentinel line back out, and produce both Markdown and JSON renderings gated on `params.response_format`. Use `_handle_error` for the connection-failure path and a tool-specific `*_ERROR:` sentinel for in-script exception handling, matching `wlst_deploy`/`wlst_start_server`/etc.
+
+### Notable runtime behaviors
+
+- WLST scripts navigate the MBean tree via `cd()`/`ls(returnMap='true')`, switching between `serverConfig()` (static config) and `domainRuntime()`/`serverRuntime()` (live runtime state) as needed — config-only data (datasource URLs, JMS JNDI names) comes from `serverConfig()`, while live state (server `RUNNING`/`SHUTDOWN`, app `STATE_ACTIVE`/`STATE_FAILED`, JVM/thread metrics) comes from the runtime MBean trees.
+- `wlst_analyze_logs` and `wlst_diagnose_application` don't just query MBeans — they also have WLST/Jython read raw log files (`$DOMAIN_HOME/servers/<name>/logs/*.log`, `nodemanager.log`) from the *Admin Server's filesystem* (since the script literally executes there) and regex-match against `restart_patterns`/`error_patterns`/`warning_patterns` lists to infer probable causes.
+- Credentials are passed per-call and interpolated directly into the generated WLST script text (never stored); the temp script file is deleted in a `finally` block immediately after execution.
