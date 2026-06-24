@@ -561,28 +561,6 @@ def _handle_error(result: Dict[str, Any]) -> str:
         return f"Error: {result['error']}"
     return "Error: Unknown error occurred during WLST execution"
 
-def _parse_json_output(output: str) -> Optional[Dict]:
-    '''Parse JSON output from WLST script.'''
-    try:
-        # Find JSON block in output
-        lines = output.split('\n')
-        json_lines = []
-        in_json = False
-
-        for line in lines:
-            if line.strip().startswith('{') or line.strip().startswith('['):
-                in_json = True
-            if in_json:
-                json_lines.append(line)
-            if in_json and (line.strip().endswith('}') or line.strip().endswith(']')):
-                break
-
-        if json_lines:
-            return json.loads('\n'.join(json_lines))
-    except json.JSONDecodeError:
-        pass
-    return None
-
 # =============================================================================
 # Tool Implementations
 # =============================================================================
